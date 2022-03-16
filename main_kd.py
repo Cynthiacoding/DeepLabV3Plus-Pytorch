@@ -36,11 +36,13 @@ def get_argparser():
                               not (name.startswith("__") or name.startswith('_')) and callable(
                               network.modeling.__dict__[name])
                               )
-    parser.add_argument("--teacher_model", type=str, default='deeplabv3plus_mobilenet',
+    parser.add_argument("--teacher_model", type=str, default='deeplabv3plus_resnet101',
                         choices=available_models, help='model name')
     parser.add_argument("--teacher_separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
-    parser.add_argument("--teacher_output_stride", type=int, default=16, choices=[8, 16])``
+    parser.add_argument("--teacher_output_stride", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--teacher_ckpt", default="checkpoints/best_deeplabv3plus_resnet101_voc_os16.pth", type=str,
+                            help="restore from checkpoint")
 
     parser.add_argument("--student_model", type=str, default='deeplabv3plus_mobilenet',
                         choices=available_models, help='model name')
@@ -249,6 +251,17 @@ def main():
     print("Dataset: %s, Train set: %d, Val set: %d" %
           (opts.dataset, len(train_dst), len(val_dst)))
 
+
+    # [A] Set up the teacher model and load the checkpoint
+    teacher_model = network.modeling.__dict__[opts.teacher_model](num_classes=opts.num_classes, output_stride=opts.teacher_output_stride)
+    if opts.teacher_separable_conv and 'plus' in opts.teacher_model:
+        network.convert_to_separable_conv(teacher_model.classifier)
+    fix_checkpoint = torch.load(opts.teacher_ckpt, map_location=torch.device('cpu'))
+    teacher_model.load_state_dict(fix_checkpoint["model_state"])
+    teacher_model = nn.DataParallel(model)
+    teacher_model.to(device)
+    teacher_model.eval()
+
     # Set up model (all models are 'constructed at network.modeling)
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     if opts.separable_conv and 'plus' in opts.model:
@@ -276,6 +289,8 @@ def main():
         criterion = utils.FocalLoss(ignore_index=255, size_average=True)
     elif opts.loss_type == 'cross_entropy':
         criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+
+    teach_criterion = utils.KL_Div_Loss()
 
     def save_ckpt(path):
         """ save current model
@@ -309,7 +324,7 @@ def main():
         print("Model restored from %s" % opts.ckpt)
         del checkpoint  # free memory
     else:
-        print("[!] Retrain")
+        print("[!] Retrain without checkpoint")
         model = nn.DataParallel(model)
         model.to(device)
 
@@ -337,8 +352,12 @@ def main():
             labels = labels.to(device, dtype=torch.long)
 
             optimizer.zero_grad()
+
+            lesson = teacher_model(images)
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            label_loss = criterion(outputs, labels)
+            diss_loss = distillation_loss(outputs, lesson)
+            loss = label_loss + diss_loss
             loss.backward()
             optimizer.step()
 

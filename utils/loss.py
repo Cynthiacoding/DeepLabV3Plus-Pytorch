@@ -22,7 +22,7 @@ class FocalLoss(nn.Module):
 
 
 class KL_Div_Loss(nn.Module):
-    def __init__(self, tau=1.0, reduction='batchmean', loss_weight=1.0):
+    def __init__(self, tau=1.0, reduction='mean', loss_weight=1.0):
         super(KL_Div_Loss, self).__init__()
         self.tau = tau
         self.loss_weight = loss_weight

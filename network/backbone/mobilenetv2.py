@@ -1,3 +1,4 @@
+
 from torch import nn
 try: # for torchvision<0.4
     from torchvision.models.utils import load_state_dict_from_url
@@ -10,6 +11,7 @@ __all__ = ['MobileNetV2', 'mobilenet_v2']
 
 model_urls = {
     'mobilenet_v2': 'https://download.pytorch.org/models/mobilenet_v2-b0353104.pth',
+    'mobilenet_v2_140':'https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/mobilenetv2_140_ra-21a4e913.pth'
 }
 
 
@@ -134,7 +136,7 @@ class MobileNetV2(nn.Module):
             else:
                 stride = s
                 current_stride *= s
-            output_channel = int(c * width_mult)
+            output_channel = _make_divisible(int(c * width_mult),round_nearest)
 
             for i in range(n):
                 if i==0:
@@ -188,3 +190,21 @@ def mobilenet_v2(pretrained=False, progress=True, **kwargs):
                                               progress=progress)
         model.load_state_dict(state_dict)
     return model
+
+def mobilenet_v2_140(pretrained=False, progress=True, **kwargs):
+    """
+    Constructs a MobileNetV2 architecture from
+    `"MobileNetV2: Inverted Residuals and Linear Bottlenecks" <https://arxiv.org/abs/1801.04381>`_.
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+        progress (bool): If True, displays a progress bar of the download to stderr
+    """
+    model = MobileNetV2(**kwargs,width_mult=1.4, inverted_residual_setting=None, round_nearest=8)
+    if pretrained:
+        state_dict = load_state_dict_from_url(model_urls['mobilenet_v2_140'],
+                                              progress=progress)
+        model.load_state_dict(state_dict)
+    return model
+
+

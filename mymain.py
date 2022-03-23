@@ -2,6 +2,7 @@ from tqdm import tqdm
 import network
 import utils
 import os
+# os.environ['CUDA_VISIBLE_DEVISCES']="1"
 import random
 import argparse
 import numpy as np
@@ -14,8 +15,6 @@ from metrics import StreamSegMetrics
 import torch
 import torch.nn as nn
 from utils.visualizer import Visualizer
-from fvcore.nn.flop_count import flop_count
-from utils.get_flops import _DEFAULT_SUPPORTED_OPS, val_shapes_first_100
 
 from PIL import Image
 import matplotlib
@@ -38,7 +37,15 @@ def get_argparser():
                               not (name.startswith("__") or name.startswith('_')) and callable(
                               network.modeling.__dict__[name])
                               )
-    parser.add_argument("--model", type=str, default='deeplabv3plus_mobilenet_140',
+    parser.add_argument("--teacher_model", type=str, default='deeplabv3plus_resnet101',
+                        choices=available_models, help='model name')
+    parser.add_argument("--teacher_separable_conv", action='store_true', default=False,
+                        help="apply separable conv to decoder and aspp")
+    parser.add_argument("--teacher_output_stride", type=int, default=8, choices=[8, 16])
+    parser.add_argument("--teacher_ckpt", default="checkpoints/best_deeplabv3plus_resnet101_voc_os16.pth", type=str,
+                            help="restore from checkpoint")
+
+    parser.add_argument("--model", type=str, default='deeplabv3plus_mobilenet',
                         choices=available_models, help='model name')
     parser.add_argument("--separable_conv", action='store_true', default=False,
                         help="apply separable conv to decoder and aspp")
@@ -46,7 +53,6 @@ def get_argparser():
 
     # Train Options
     parser.add_argument("--test_only", action='store_true', default=False)
-    parser.add_argument("--info", action='store_true', default=False)
     parser.add_argument("--save_val_results", action='store_true', default=False,
                         help="save segmentation results to \"./results\"")
     parser.add_argument("--total_itrs", type=int, default=30e3,
@@ -246,6 +252,18 @@ def main():
     print("Dataset: %s, Train set: %d, Val set: %d" %
           (opts.dataset, len(train_dst), len(val_dst)))
 
+
+    # [A] Set up the teacher model and load the checkpoint
+    teacher_model = network.modeling.__dict__[opts.teacher_model](num_classes=opts.num_classes, output_stride=opts.teacher_output_stride, pretrained_backbone=np.False_)
+    if opts.teacher_separable_conv and 'plus' in opts.teacher_model:
+        network.convert_to_separable_conv(teacher_model.classifier)
+    fix_checkpoint = torch.load(opts.teacher_ckpt, map_location=torch.device('cpu'))
+    teacher_model.load_state_dict(fix_checkpoint["model_state"])
+    print("The checkpoint of teacher model is loaded")
+    teacher_model = nn.DataParallel(teacher_model)
+    teacher_model.to(device)
+    teacher_model.eval()
+
     # Set up model (all models are 'constructed at network.modeling)
     model = network.modeling.__dict__[opts.model](num_classes=opts.num_classes, output_stride=opts.output_stride)
     if opts.separable_conv and 'plus' in opts.model:
@@ -273,6 +291,7 @@ def main():
         criterion = utils.FocalLoss(ignore_index=255, size_average=True)
     elif opts.loss_type == 'cross_entropy':
         criterion = nn.CrossEntropyLoss(ignore_index=255, reduction='mean')
+    teach_criterion = utils.KL_Div_Loss(reduction='batchmean')
 
     def save_ckpt(path):
         """ save current model
@@ -306,7 +325,7 @@ def main():
         print("Model restored from %s" % opts.ckpt)
         del checkpoint  # free memory
     else:
-        print("[!] Retrain")
+        print("[!] Retrain without checkpoint")
         model = nn.DataParallel(model)
         model.to(device)
 
@@ -322,24 +341,8 @@ def main():
         print(metrics.to_str(val_score))
         return
 
-    if opts.info:
-        model.eval()
-        
-        with torch.no_grad():
-            gflops = 0
-            for input_shape in val_shapes_first_100():
-                dummy_input = torch.randn(1, *input_shape).cuda()
-                g = flop_count(model, dummy_input, _DEFAULT_SUPPORTED_OPS)[0]
-                gflops += sum(g.values())
-            gflops /= 100
-
-        n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
-
-        print('\ngflops', gflops)
-        print('\nparam', n_parameters)
-        return
-
     interval_loss = 0
+    kd_interval_loss = 0
     while True:  # cur_itrs < opts.total_itrs:
         # =====  Train  =====
         model.train()
@@ -351,24 +354,32 @@ def main():
             labels = labels.to(device, dtype=torch.long)
 
             optimizer.zero_grad()
+            with torch.no_grad():
+                lesson = teacher_model(images)
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            # teacher_loss = criterion(lesson, labels)
+            label_loss = criterion(outputs, labels)
+            diss_loss = teach_criterion(outputs, lesson)/(outputs.shape[-1]*outputs.shape[-2])
+            loss = label_loss*0.5 + diss_loss*0.5
             loss.backward()
             optimizer.step()
 
             np_loss = loss.detach().cpu().numpy()
             interval_loss += np_loss
+            kd_interval_loss += diss_loss.detach().cpu().numpy()
             if vis is not None:
                 vis.vis_scalar('Loss', cur_itrs, np_loss)
 
             if (cur_itrs) % 10 == 0:
                 interval_loss = interval_loss / 10
-                print("Epoch %d, Itrs %d/%d, Loss=%f" %
-                      (cur_epochs, cur_itrs, opts.total_itrs, interval_loss))
+                kd_interval_loss = kd_interval_loss / 10
+                print("Epoch %d, Itrs %d/%d, Loss=%f, kd_Loss=%f" %
+                      (cur_epochs, cur_itrs, opts.total_itrs, interval_loss,kd_interval_loss))
                 interval_loss = 0.0
+                kd_interval_loss = 0.0 
 
             if (cur_itrs) % opts.val_interval == 0:
-                save_ckpt('checkpoints/latest_%s_%s_os%d.pth' %
+                save_ckpt('checkpoints/latest_%s_%s_os%d_kd.pth' %
                           (opts.model, opts.dataset, opts.output_stride))
                 print("validation...")
                 model.eval()
@@ -378,7 +389,7 @@ def main():
                 print(metrics.to_str(val_score))
                 if val_score['Mean IoU'] > best_score:  # save best model
                     best_score = val_score['Mean IoU']
-                    save_ckpt('checkpoints/best_%s_%s_os%d.pth' %
+                    save_ckpt('checkpoints/best_%s_%s_os%d_kd.pth' %
                               (opts.model, opts.dataset, opts.output_stride))
 
                 if vis is not None:  # visualize validation score and samples

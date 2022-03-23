@@ -43,6 +43,11 @@ class KL_Div_Loss(nn.Module):
         Return:
             torch.Tensor: The calculated loss value.
         """
+
+        # log2div = preds_S.flatten(start_dim=1)
+        # tar2div = preds_T.flatten(start_dim=1).detach()
+        # kldiv_loss = nn.KLDivLoss(reduction="batchmean")(F.log_softmax((log2div / self.T), dim = 1), F.softmax((tar2div / self.T), dim = 1))*(self.alpha * self.T * self.T)
+        # return kldiv_loss
         preds_T = preds_T.detach()
         softmax_pred_T = F.softmax(preds_T / self.tau, dim=1)
         logsoftmax_preds_S = F.log_softmax(preds_S / self.tau, dim=1)

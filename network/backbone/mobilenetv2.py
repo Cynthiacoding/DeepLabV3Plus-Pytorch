@@ -8,7 +8,7 @@ except: # for torchvision>=0.4
 import torch.nn.functional as F
 
 
-# from my_look_table import LookUpTable,MBConv
+# from my_look_table import MBConv
 
 __all__ = ['MobileNetV2', 'mobilenet_v2']
 

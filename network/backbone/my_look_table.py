@@ -3,6 +3,8 @@ import torch
 from collections import OrderedDict
 import torch.nn as nn
 import time
+
+
 OPS = {
     'mbconv_k3_t1': lambda C_in, C_out, stride, affine, track_running_stats: MBConv(C_in, C_out, 3, stride, 1, t=1, affine=affine, track_running_stats=track_running_stats),
     'mbconv_k3_t6': lambda C_in, C_out, stride, affine, track_running_stats: MBConv(C_in, C_out, 3, stride, 1, t=6, affine=affine, track_running_stats=track_running_stats),
@@ -178,16 +180,17 @@ def collect(SEARCH_SPACE, load_time, log_txt=None):
             with open(log_txt,"a") as f:
                 f.write(property_cov+ ":"+ str(collect_time)+ "\n")
 
-log_txt = "/data/renhongzhang/DeepLabV3Plus-Pytorch/network/backbone/log.txt"
-load_time = torch.zeros(16)
-collect(SEARCH_SPACE,load_time)
-print(load_time)
-collect(SEARCH_SPACE,load_time)
-print(load_time)
-collect(SEARCH_SPACE,load_time)
-print(load_time)
-collect(SEARCH_SPACE,load_time)
-collect(SEARCH_SPACE,load_time)
+if __name__=="__main__":
+    log_txt = "/data/renhongzhang/DeepLabV3Plus-Pytorch/network/backbone/log.txt"
+    load_time = torch.zeros(16)
+    collect(SEARCH_SPACE,load_time)
+    print(load_time)
+    collect(SEARCH_SPACE,load_time)
+    print(load_time)
+    collect(SEARCH_SPACE,load_time)
+    print(load_time)
+    collect(SEARCH_SPACE,load_time)
+    collect(SEARCH_SPACE,load_time)
 
 
 

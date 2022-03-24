@@ -266,6 +266,8 @@ def main():
         scheduler = utils.PolyLR(optimizer, opts.total_itrs, power=0.9)
     elif opts.lr_policy == 'step':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=opts.step_size, gamma=0.1)
+    else:
+        print("mini")
 
     # Set up criterion
     # criterion = utils.get_loss(opts.loss_type)
